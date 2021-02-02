@@ -1,10 +1,11 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, Data, DeriveInput, Fields, GenericArgument, Ident, PathArguments, Type,
+    parse_macro_input, spanned::Spanned, Data, DeriveInput, Field, Fields, GenericArgument, Ident,
+    Meta, PathArguments, Type,
 };
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // Parse the macro input as a syn::DeriveInput syntax tree.
     let input = parse_macro_input!(input as DeriveInput);
@@ -81,6 +82,10 @@ fn build_builder_fields_init(data: &Data) -> TokenStream {
                         quote! {
                             #name: Some(None)
                         }
+                    } else if find_builder_attribute_each_arg(f).is_some() {
+                        quote! {
+                            #name: Some(Vec::new())
+                        }
                     } else {
                         quote! {
                             #name: None
@@ -111,6 +116,38 @@ fn build_builder_methods_definition(data: &Data) -> TokenStream {
                                 self.#name = Some(Some(#name));
                                 self
                             }
+                        }
+                    } else if let Some(each_arg) = find_builder_attribute_each_arg(f) {
+                        let each_arg_ident = Ident::new(&each_arg, f.span());
+                        let vec_generic_ty =
+                            find_vec_generic_type(ty).expect("generic type to exist");
+                        let each_arg_method = quote! {
+                            fn #each_arg_ident(&mut self, #each_arg_ident: #vec_generic_ty) -> &mut Self {
+                                if let Some(ref mut v) = self.#name.as_mut() {
+                                    v.push(#each_arg_ident);
+                                } else {
+                                    let mut v = Vec::new();
+                                    v.push(#each_arg_ident);
+                                    self.#name = Some(v);
+                                }
+                                self
+                            }
+                        };
+
+                        let all_method = if Some(each_arg) == name.as_ref().map(|n| n.to_string()) {
+                            quote! {}
+                        } else {
+                            quote! {
+                                fn #name(&mut self, #name: #ty) -> &mut Self {
+                                    self.#name = Some(#name);
+                                    self
+                                }
+                            }
+                        };
+
+                        quote! {
+                            #each_arg_method
+                            #all_method
                         }
                     } else {
                         quote! {
@@ -168,6 +205,67 @@ fn find_option_generic_type(ty: &Type) -> Option<Type> {
             if segments.len() == 1 {
                 if let Some(segment) = segments.first() {
                     if segment.ident.to_string() == "Option" {
+                        if let PathArguments::AngleBracketed(ref args) = segment.arguments {
+                            if let Some(GenericArgument::Type(generic_ty)) = args.args.first() {
+                                return Some(generic_ty.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Determine if there is a `builder` attribute on a field and return the `each` value if it exists.
+fn find_builder_attribute_each_arg(field: &Field) -> Option<String> {
+    for attr in &field.attrs {
+        let meta = attr.parse_meta().expect("can parse meta attributes");
+        match meta {
+            Meta::List(list) => {
+                let path_segments = &list.path.segments;
+                if path_segments.len() == 1 {
+                    if let Some(first_segment) = path_segments.first() {
+                        if first_segment.ident.to_string() == "builder" {
+                            for nested in list.nested {
+                                if let syn::NestedMeta::Meta(nested_meta) = nested {
+                                    match nested_meta {
+                                        Meta::NameValue(ref name_value) => {
+                                            if let Some(segment) = name_value.path.segments.first()
+                                            {
+                                                if segment.ident.to_string() == "each" {
+                                                    if let syn::Lit::Str(ref lit_str) =
+                                                        name_value.lit
+                                                    {
+                                                        return Some(lit_str.value());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => unimplemented!(),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => unimplemented!(),
+        }
+    }
+    None
+}
+
+/// Find the generic type if the `ty` argument is a `Vec` type.
+fn find_vec_generic_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Path(ref ty_path) => {
+            let segments = &ty_path.path.segments;
+            if segments.len() == 1 {
+                if let Some(segment) = segments.first() {
+                    if segment.ident.to_string() == "Vec" {
                         if let PathArguments::AngleBracketed(ref args) = segment.arguments {
                             if let Some(GenericArgument::Type(generic_ty)) = args.args.first() {
                                 return Some(generic_ty.clone());
