@@ -20,6 +20,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let builder_fields_definition = build_builder_fields_definition(&data);
     let builder_fields_init = build_builder_fields_init(&data);
     let builder_methods_definition = build_builder_methods_definition(&data);
+    let builder_build_method = build_builder_build_method(&name, &data);
 
     let expanded = quote! {
         pub struct #builder_name {
@@ -28,6 +29,8 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         impl #builder_name {
             #builder_methods_definition
+
+            #builder_build_method
         }
 
         impl #name {
@@ -102,6 +105,35 @@ fn build_builder_methods_definition(data: &Data) -> TokenStream {
                 });
                 quote! {
                     #(#methods )*
+                }
+            }
+            Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    }
+}
+
+/// Define the builder's build() method.
+fn build_builder_build_method(name: &Ident, data: &Data) -> TokenStream {
+    match data {
+        Data::Struct(data) => match data.fields {
+            Fields::Named(ref fields) => {
+                let fields = fields.named.iter().map(|f| {
+                    let name = &f.ident;
+                    let name_str = name
+                        .clone()
+                        .map(|n| n.to_string())
+                        .unwrap_or("(no identifier)".to_string());
+                    quote! {
+                        #name: self.#name.take().ok_or(format!("field {} was not set", #name_str))?
+                    }
+                });
+                quote! {
+                    pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+                        Ok(#name {
+                            #(#fields,)*
+                        })
+                    }
                 }
             }
             Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
