@@ -61,7 +61,7 @@ fn build_builder_fields_definition(data: &Data) -> TokenStream {
                     let name = &f.ident;
                     let ty = &f.ty;
                     quote! {
-                        #name: Option<#ty>
+                        #name: std::option::Option<#ty>
                     }
                 });
                 quote! {
@@ -87,15 +87,15 @@ fn build_builder_fields_init(data: &Data) -> Result<TokenStream, Error> {
                         let ty = &f.ty;
                         Ok(if find_option_generic_type(ty).is_some() {
                             quote! {
-                                #name: Some(None)
+                                #name: std::option::Option::Some(std::option::Option::None)
                             }
                         } else if find_builder_attribute_each_arg(f)?.is_some() {
                             quote! {
-                                #name: Some(Vec::new())
+                                #name: std::option::Option::Some(std::vec::Vec::new())
                             }
                         } else {
                             quote! {
-                                #name: None
+                                #name: std::option::Option::None
                             }
                         })
                     })
@@ -121,7 +121,7 @@ fn build_builder_methods_definition(data: &Data) -> Result<TokenStream, Error> {
                     if let Some(option_generic_ty) = find_option_generic_type(ty) {
                         Ok(quote! {
                             fn #name(&mut self, #name: #option_generic_ty) -> &mut Self {
-                                self.#name = Some(Some(#name));
+                                self.#name = std::option::Option::Some(std::option::Option::Some(#name));
                                 self
                             }
                         })
@@ -147,7 +147,7 @@ fn build_builder_methods_definition(data: &Data) -> Result<TokenStream, Error> {
                         } else {
                             quote! {
                                 fn #name(&mut self, #name: #ty) -> &mut Self {
-                                    self.#name = Some(#name);
+                                    self.#name = std::option::Option::Some(#name);
                                     self
                                 }
                             }
@@ -160,7 +160,7 @@ fn build_builder_methods_definition(data: &Data) -> Result<TokenStream, Error> {
                     } else {
                         Ok(quote! {
                             fn #name(&mut self, #name: #ty) -> &mut Self {
-                                self.#name = Some(#name);
+                                self.#name = std::option::Option::Some(#name);
                                 self
                             }
                         })
@@ -192,8 +192,8 @@ fn build_builder_build_method(name: &Ident, data: &Data) -> TokenStream {
                     }
                 });
                 quote! {
-                    pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
-                        Ok(#name {
+                    pub fn build(&mut self) -> std::result::Result<#name, std::boxed::Box<dyn std::error::Error>> {
+                        std::result::Result::Ok(#name {
                             #(#fields,)*
                         })
                     }
