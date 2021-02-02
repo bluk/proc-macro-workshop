@@ -19,10 +19,15 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let builder_fields_definition = build_builder_fields_definition(&data);
     let builder_fields_init = build_builder_fields_init(&data);
+    let builder_methods_definition = build_builder_methods_definition(&data);
 
     let expanded = quote! {
         pub struct #builder_name {
             #builder_fields_definition
+        }
+
+        impl #builder_name {
+            #builder_methods_definition
         }
 
         impl #name {
@@ -72,6 +77,31 @@ fn build_builder_fields_init(data: &Data) -> TokenStream {
                 });
                 quote! {
                     #(#fields,)*
+                }
+            }
+            Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    }
+}
+
+/// Define the builder methods.
+fn build_builder_methods_definition(data: &Data) -> TokenStream {
+    match data {
+        Data::Struct(data) => match data.fields {
+            Fields::Named(ref fields) => {
+                let methods = fields.named.iter().map(|f| {
+                    let name = &f.ident;
+                    let ty = &f.ty;
+                    quote! {
+                        fn #name(&mut self, #name: #ty) -> &mut Self {
+                            self.#name = Some(#name);
+                            self
+                        }
+                    }
+                });
+                quote! {
+                    #(#methods )*
                 }
             }
             Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
