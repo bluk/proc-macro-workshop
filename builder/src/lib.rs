@@ -1,8 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, spanned::Spanned, Data, DeriveInput, Field, Fields, GenericArgument, Ident,
-    Meta, PathArguments, Type,
+    parse_macro_input, spanned::Spanned, Data, DeriveInput, Error, Field, Fields, GenericArgument,
+    Ident, Meta, PathArguments, Type,
 };
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -10,6 +10,12 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     // Parse the macro input as a syn::DeriveInput syntax tree.
     let input = parse_macro_input!(input as DeriveInput);
 
+    let output = derive_builder(input).unwrap_or_else(|e| e.to_compile_error());
+
+    proc_macro::TokenStream::from(output)
+}
+
+fn derive_builder(input: DeriveInput) -> Result<TokenStream, Error> {
     // The name of the type which the derive macro is annotating
     let name = input.ident;
 
@@ -21,11 +27,11 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let data = input.data;
 
     let builder_fields_definition = build_builder_fields_definition(&data);
-    let builder_fields_init = build_builder_fields_init(&data);
-    let builder_methods_definition = build_builder_methods_definition(&data);
+    let builder_fields_init = build_builder_fields_init(&data)?;
+    let builder_methods_definition = build_builder_methods_definition(&data)?;
     let builder_build_method = build_builder_build_method(&name, &data);
 
-    let expanded = quote! {
+    Ok(quote! {
         pub struct #builder_name {
             #builder_fields_definition
         }
@@ -43,9 +49,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
             }
         }
-    };
-
-    proc_macro::TokenStream::from(expanded)
+    })
 }
 
 /// Define the Builder struct fields.
@@ -71,30 +75,34 @@ fn build_builder_fields_definition(data: &Data) -> TokenStream {
 }
 
 /// Build the code to init the Builder struct fields in the builder() method.
-fn build_builder_fields_init(data: &Data) -> TokenStream {
+fn build_builder_fields_init(data: &Data) -> Result<TokenStream, Error> {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref fields) => {
-                let fields = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    let ty = &f.ty;
-                    if find_option_generic_type(ty).is_some() {
-                        quote! {
-                            #name: Some(None)
-                        }
-                    } else if find_builder_attribute_each_arg(f).is_some() {
-                        quote! {
-                            #name: Some(Vec::new())
-                        }
-                    } else {
-                        quote! {
-                            #name: None
-                        }
-                    }
-                });
-                quote! {
+                let fields = fields
+                    .named
+                    .iter()
+                    .map(|f| {
+                        let name = &f.ident;
+                        let ty = &f.ty;
+                        Ok(if find_option_generic_type(ty).is_some() {
+                            quote! {
+                                #name: Some(None)
+                            }
+                        } else if find_builder_attribute_each_arg(f)?.is_some() {
+                            quote! {
+                                #name: Some(Vec::new())
+                            }
+                        } else {
+                            quote! {
+                                #name: None
+                            }
+                        })
+                    })
+                    .collect::<Result<Vec<TokenStream>, Error>>()?;
+                Ok(quote! {
                     #(#fields,)*
-                }
+                })
             }
             Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
         },
@@ -103,7 +111,7 @@ fn build_builder_fields_init(data: &Data) -> TokenStream {
 }
 
 /// Define the builder methods.
-fn build_builder_methods_definition(data: &Data) -> TokenStream {
+fn build_builder_methods_definition(data: &Data) -> Result<TokenStream, Error> {
     match data {
         Data::Struct(data) => match data.fields {
             Fields::Named(ref fields) => {
@@ -111,13 +119,13 @@ fn build_builder_methods_definition(data: &Data) -> TokenStream {
                     let name = &f.ident;
                     let ty = &f.ty;
                     if let Some(option_generic_ty) = find_option_generic_type(ty) {
-                        quote! {
+                        Ok(quote! {
                             fn #name(&mut self, #name: #option_generic_ty) -> &mut Self {
                                 self.#name = Some(Some(#name));
                                 self
                             }
-                        }
-                    } else if let Some(each_arg) = find_builder_attribute_each_arg(f) {
+                        })
+                    } else if let Some(each_arg) = find_builder_attribute_each_arg(f)? {
                         let each_arg_ident = Ident::new(&each_arg, f.span());
                         let vec_generic_ty =
                             find_vec_generic_type(ty).expect("generic type to exist");
@@ -145,22 +153,22 @@ fn build_builder_methods_definition(data: &Data) -> TokenStream {
                             }
                         };
 
-                        quote! {
+                        Ok(quote! {
                             #each_arg_method
                             #all_method
-                        }
+                        })
                     } else {
-                        quote! {
+                        Ok(quote! {
                             fn #name(&mut self, #name: #ty) -> &mut Self {
                                 self.#name = Some(#name);
                                 self
                             }
-                        }
+                        })
                     }
-                });
-                quote! {
+                }).collect::<Result<Vec<TokenStream>, Error>>()?;
+                Ok(quote! {
                     #(#methods )*
-                }
+                })
             }
             Fields::Unit | Fields::Unnamed(_) => unimplemented!(),
         },
@@ -220,16 +228,16 @@ fn find_option_generic_type(ty: &Type) -> Option<Type> {
 }
 
 /// Determine if there is a `builder` attribute on a field and return the `each` value if it exists.
-fn find_builder_attribute_each_arg(field: &Field) -> Option<String> {
+fn find_builder_attribute_each_arg(field: &Field) -> Result<Option<String>, Error> {
     for attr in &field.attrs {
         let meta = attr.parse_meta().expect("can parse meta attributes");
-        match meta {
+        match &meta {
             Meta::List(list) => {
                 let path_segments = &list.path.segments;
                 if path_segments.len() == 1 {
                     if let Some(first_segment) = path_segments.first() {
                         if first_segment.ident.to_string() == "builder" {
-                            for nested in list.nested {
+                            for nested in &list.nested {
                                 if let syn::NestedMeta::Meta(nested_meta) = nested {
                                     match nested_meta {
                                         Meta::NameValue(ref name_value) => {
@@ -239,8 +247,13 @@ fn find_builder_attribute_each_arg(field: &Field) -> Option<String> {
                                                     if let syn::Lit::Str(ref lit_str) =
                                                         name_value.lit
                                                     {
-                                                        return Some(lit_str.value());
+                                                        return Ok(Some(lit_str.value()));
                                                     }
+                                                } else {
+                                                    return Err(syn::Error::new_spanned(
+                                                        &meta,
+                                                        "expected `builder(each = \"...\")`",
+                                                    ));
                                                 }
                                             }
                                         }
@@ -255,7 +268,7 @@ fn find_builder_attribute_each_arg(field: &Field) -> Option<String> {
             _ => unimplemented!(),
         }
     }
-    None
+    Ok(None)
 }
 
 /// Find the generic type if the `ty` argument is a `Vec` type.
