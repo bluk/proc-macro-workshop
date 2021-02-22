@@ -1,14 +1,15 @@
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream, Result},
-    parse_macro_input, Expr, Ident, LitInt, Token,
+    parse_macro_input, Ident, LitInt, Token,
 };
 
 struct Seq {
     _ident: Ident,
     _start: LitInt,
     _end: LitInt,
-    _expr: Expr,
+    _stream: TokenStream,
 }
 
 impl Parse for Seq {
@@ -18,12 +19,12 @@ impl Parse for Seq {
         let start = input.parse::<LitInt>()?;
         input.parse::<Token![..]>()?;
         let end = input.parse::<LitInt>()?;
-        let expr: Expr = input.parse()?;
+        let stream: TokenStream = input.parse()?;
         Ok(Seq {
             _ident: ident,
             _start: start,
             _end: end,
-            _expr: expr,
+            _stream: stream,
         })
     }
 }
