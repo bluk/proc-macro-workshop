@@ -8,26 +8,22 @@
 
 use seq::seq;
 
-const PROCS: [Proc; 256] = {
-    seq!(N in 0..256 {
-        [
-            #(
-                Proc::new(N),
-            )*
-        ]
-    })
-};
-
-struct Proc {
-    id: usize,
-}
-
-impl Proc {
-    const fn new(id: usize) -> Self {
-        Proc { id }
+seq!(N in 16..=20 {
+    enum E {
+        #(
+            Variant#N,
+        )*
     }
-}
+});
 
 fn main() {
-    assert_eq!(PROCS[32].id, 32);
+    let e = E::Variant16;
+
+    let desc = match e {
+        E::Variant16 => "min",
+        E::Variant17 | E::Variant18 | E::Variant19 => "in between",
+        E::Variant20 => "max",
+    };
+
+    assert_eq!(desc, "min");
 }

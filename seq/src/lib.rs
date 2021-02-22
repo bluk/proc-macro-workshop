@@ -9,6 +9,7 @@ struct Seq {
     name_to_replace: Ident,
     begin: RepeatNumType,
     end: RepeatNumType,
+    inclusive: bool,
     content: TokenStream,
 }
 
@@ -19,6 +20,12 @@ impl Parse for Seq {
         let begin = input.parse::<LitInt>()?;
         let begin = begin.base10_parse::<RepeatNumType>()?;
         input.parse::<Token![..]>()?;
+        let inclusive = if input.peek(Token![=]) {
+            input.parse::<Token![=]>()?;
+            true
+        } else {
+            false
+        };
         let end = input.parse::<LitInt>()?;
         let end = end.base10_parse::<RepeatNumType>()?;
 
@@ -30,6 +37,7 @@ impl Parse for Seq {
             name_to_replace,
             begin,
             end,
+            inclusive,
             content,
         })
     }
@@ -42,10 +50,17 @@ fn repeat_content(
     name_to_replace: &Ident,
     begin: RepeatNumType,
     end: RepeatNumType,
+    inclusive: bool,
 ) -> Vec<TokenStream> {
-    (begin..end)
-        .map(|n| replace_content(ts.clone(), name_to_replace, n))
-        .collect()
+    if inclusive {
+        (begin..=end)
+            .map(|n| replace_content(ts.clone(), name_to_replace, n))
+            .collect()
+    } else {
+        (begin..end)
+            .map(|n| replace_content(ts.clone(), name_to_replace, n))
+            .collect()
+    }
 }
 
 fn replace_content(ts: TokenStream, name_to_replace: &Ident, num: RepeatNumType) -> TokenStream {
@@ -180,6 +195,7 @@ fn repeat_section(
     name_to_replace: &Ident,
     begin: RepeatNumType,
     end: RepeatNumType,
+    inclusive: bool,
 ) -> TokenStream {
     enum DetectSectionState {
         Sharp(proc_macro2::Punct),
@@ -211,7 +227,8 @@ fn repeat_section(
                     }
                     DetectSectionState::GroupAfterSharp(existing_p, g) => match p.as_char() {
                         '*' => {
-                            let streams = repeat_content(g.stream(), name_to_replace, begin, end);
+                            let streams =
+                                repeat_content(g.stream(), name_to_replace, begin, end, inclusive);
                             streams.into_iter().for_each(|s| tokens.extend(s));
                         }
                         '#' => {
@@ -241,7 +258,7 @@ fn repeat_section(
 
                 let g = proc_macro2::Group::new(
                     g.delimiter(),
-                    repeat_section(g.stream(), name_to_replace, begin, end),
+                    repeat_section(g.stream(), name_to_replace, begin, end, inclusive),
                 );
                 match tmp_state {
                     DetectSectionState::Sharp(p) => {
@@ -285,16 +302,17 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         name_to_replace,
         begin,
         end,
+        inclusive,
         content,
     } = parse_macro_input!(input as Seq);
 
     let expanded = if repeat_section_exists(content.clone()) {
-        let stream = repeat_section(content, &name_to_replace, begin, end);
+        let stream = repeat_section(content, &name_to_replace, begin, end, inclusive);
         quote! {
             #stream
         }
     } else {
-        let streams = repeat_content(content, &name_to_replace, begin, end);
+        let streams = repeat_content(content, &name_to_replace, begin, end, inclusive);
         quote! {
             #(#streams)*
         }
