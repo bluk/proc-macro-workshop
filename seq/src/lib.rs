@@ -35,28 +35,81 @@ impl Parse for Seq {
     }
 }
 
-fn replace_token_tree(tt: TokenTree, ident: &Ident, n: isize) -> TokenTree {
-    match &tt {
-        TokenTree::Ident(i) => {
-            if *i == *ident {
-                TokenTree::Literal(proc_macro2::Literal::isize_unsuffixed(n))
-            } else {
-                tt
+fn replace_token_stream(ts: TokenStream, ident: &Ident, n: isize) -> TokenStream {
+    let mut tokens: Vec<TokenTree> = Vec::new();
+    let mut ts_iter = ts.into_iter().peekable();
+
+    while let Some(tt) = ts_iter.next() {
+        match &tt {
+            TokenTree::Ident(i) => {
+                if *i == *ident {
+                    tokens.push(TokenTree::Literal(proc_macro2::Literal::isize_unsuffixed(
+                        n,
+                    )));
+                } else {
+                    if let Some(peek_tt) = ts_iter.peek() {
+                        match &peek_tt {
+                            TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Literal(_) => {
+                                tokens.push(tt);
+                            }
+                            TokenTree::Punct(p) => match p.as_char() {
+                                '#' => {
+                                    let sharp_punct = ts_iter.next();
+                                    if let Some(after_sharp_tt) = ts_iter.peek() {
+                                        match after_sharp_tt {
+                                            TokenTree::Ident(after_sharp_ident) => {
+                                                if *after_sharp_ident == *ident {
+                                                    let _ = ts_iter.next();
+                                                    let new_ident = Ident::new(
+                                                        &format!("{}{}", i, n),
+                                                        i.span(),
+                                                    );
+                                                    tokens.push(TokenTree::Ident(new_ident));
+                                                } else {
+                                                    tokens.push(tt);
+                                                    if let Some(sharp_punct) = sharp_punct {
+                                                        tokens.push(sharp_punct);
+                                                    }
+                                                }
+                                            }
+                                            TokenTree::Group(_)
+                                            | TokenTree::Punct(_)
+                                            | TokenTree::Literal(_) => {
+                                                tokens.push(tt);
+                                                if let Some(sharp_punct) = sharp_punct {
+                                                    tokens.push(sharp_punct);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        tokens.push(tt);
+                                        if let Some(sharp_punct) = sharp_punct {
+                                            tokens.push(sharp_punct);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    tokens.push(tt);
+                                }
+                            },
+                        }
+                    }
+                }
             }
+            TokenTree::Group(grp) => {
+                let mut g = proc_macro2::Group::new(
+                    grp.delimiter(),
+                    replace_token_stream(grp.stream(), &ident, n),
+                );
+                g.set_span(grp.span());
+                tokens.push(TokenTree::Group(g));
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => tokens.push(tt),
         }
-        TokenTree::Group(grp) => {
-            let mut g = proc_macro2::Group::new(
-                grp.delimiter(),
-                grp.stream()
-                    .into_iter()
-                    .map(|t| replace_token_tree(t, &ident, n))
-                    .collect(),
-            );
-            g.set_span(grp.span());
-            TokenTree::Group(g)
-        }
-        TokenTree::Punct(_) | TokenTree::Literal(_) => tt,
     }
+
+    use std::iter::FromIterator;
+    TokenStream::from_iter(tokens)
 }
 
 #[proc_macro]
@@ -69,13 +122,7 @@ pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     } = parse_macro_input!(input as Seq);
 
     let streams: Vec<TokenStream> = (start..end)
-        .map(|n| {
-            content
-                .clone()
-                .into_iter()
-                .map(|tt| replace_token_tree(tt, &ident, n))
-                .collect()
-        })
+        .map(|n| replace_token_stream(content.clone(), &ident, n))
         .collect();
 
     let expanded = quote! {
