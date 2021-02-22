@@ -1,4 +1,4 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{TokenStream, TokenTree};
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream, Result},
@@ -6,10 +6,10 @@ use syn::{
 };
 
 struct Seq {
-    _ident: Ident,
-    _start: LitInt,
-    _end: LitInt,
-    _stream: TokenStream,
+    ident: Ident,
+    start: isize,
+    end: isize,
+    content: TokenStream,
 }
 
 impl Parse for Seq {
@@ -17,21 +17,69 @@ impl Parse for Seq {
         let ident: Ident = input.parse()?;
         input.parse::<Token![in]>()?;
         let start = input.parse::<LitInt>()?;
+        let start = start.base10_parse::<isize>()?;
         input.parse::<Token![..]>()?;
         let end = input.parse::<LitInt>()?;
-        let stream: TokenStream = input.parse()?;
+        let end = end.base10_parse::<isize>()?;
+
+        let content;
+        let _ = syn::braced!(content in input);
+        let content = content.parse()?;
+
         Ok(Seq {
-            _ident: ident,
-            _start: start,
-            _end: end,
-            _stream: stream,
+            ident,
+            start,
+            end,
+            content,
         })
+    }
+}
+
+fn replace_token_tree(tt: TokenTree, ident: &Ident, n: isize) -> TokenTree {
+    match &tt {
+        TokenTree::Ident(i) => {
+            if *i == *ident {
+                TokenTree::Literal(proc_macro2::Literal::isize_unsuffixed(n))
+            } else {
+                tt
+            }
+        }
+        TokenTree::Group(grp) => {
+            let mut g = proc_macro2::Group::new(
+                grp.delimiter(),
+                grp.stream()
+                    .into_iter()
+                    .map(|t| replace_token_tree(t, &ident, n))
+                    .collect(),
+            );
+            g.set_span(grp.span());
+            TokenTree::Group(g)
+        }
+        TokenTree::Punct(_) | TokenTree::Literal(_) => tt,
     }
 }
 
 #[proc_macro]
 pub fn seq(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let Seq { .. } = parse_macro_input!(input as Seq);
+    let Seq {
+        ident,
+        start,
+        end,
+        content,
+    } = parse_macro_input!(input as Seq);
 
-    proc_macro::TokenStream::from(quote! {})
+    let streams: Vec<TokenStream> = (start..end)
+        .map(|n| {
+            content
+                .clone()
+                .into_iter()
+                .map(|tt| replace_token_tree(tt, &ident, n))
+                .collect()
+        })
+        .collect();
+
+    let expanded = quote! {
+        #(#streams)*
+    };
+    proc_macro::TokenStream::from(expanded)
 }
